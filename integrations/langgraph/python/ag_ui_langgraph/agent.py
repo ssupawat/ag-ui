@@ -989,9 +989,27 @@ class LangGraphAgent:
         if self.active_run is None:
             raise RuntimeError("_handle_single_event called outside an active run")
         event_type = event.get("event")
+
+        # Suppress subagent tool call events (langgraph 1.2.3+ stamps
+        # metadata.lc_agent_name on runtime-dispatched subagent events).
+        metadata = event.get("metadata") or {}
+        event_lc_agent_name = metadata.get("lc_agent_name")
+        parent_lc_agent_name = self.active_run.get("lc_agent_name")
+        filter_subagent_tool_events = (
+            self.active_run.get("filter_subagent_tool_events", True)
+        )
+        is_subagent_tool_event = (
+            filter_subagent_tool_events
+            and event_lc_agent_name is not None
+            and event_lc_agent_name != parent_lc_agent_name
+        )
+
         if event_type == LangGraphEventTypes.OnChatModelStream:
             should_emit_messages = (event.get("metadata") or {}).get("emit-messages", True)
-            should_emit_tool_calls = (event.get("metadata") or {}).get("emit-tool-calls", True)
+            should_emit_tool_calls = (
+                (event.get("metadata") or {}).get("emit-tool-calls", True)
+                and not is_subagent_tool_event
+            )
 
             # Chunks are normally LangChain BaseMessage instances (attribute
             # access), but some upstream paths deliver raw dicts — use dual-path
@@ -1346,6 +1364,8 @@ class LangGraphAgent:
             )
 
         elif event_type == LangGraphEventTypes.OnToolEnd:
+            if is_subagent_tool_event:
+                return
             tool_call_output = event["data"]["output"]
 
             if isinstance(tool_call_output, Command):
